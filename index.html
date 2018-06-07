@@ -1,0 +1,896 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset=utf-8>
+    <title>Sky R</title>
+    <style>
+      body {  margin: 0;
+              background-color: #000000;
+              overflow: hidden; 
+              }
+      canvas { width: 100%; height: 100% }
+    </style>
+  </head>
+  <body>
+    <script src="js/tween.js"></script>
+    <script src="js/three.js"></script>
+    <!--script src="http://cdnjs.cloudflare.com/ajax/libs/three.js/r73/three.js"></script-->
+    <script "text/javascript" src="js/dat.gui.js"></script>
+
+    <script src="js/shaders/BleachBypassShader.js"></script>
+    <script src="js/shaders/ColorifyShader.js"></script>
+    <script src="js/shaders/ConvolutionShader.js"></script>
+    <script src="js/shaders/CopyShader.js"></script>
+    <script src="js/shaders/DotScreenShader.js"></script>
+    <script src="js/shaders/FilmShader.js"></script>
+    <script src="js/shaders/HorizontalBlurShader.js"></script>
+    <script src="js/shaders/SepiaShader.js"></script>
+    <script src="js/shaders/VerticalBlurShader.js"></script>
+    <script src="js/shaders/VignetteShader.js"></script>
+
+    <script src="js/postprocessing/EffectComposer.js"></script>
+    <script src="js/postprocessing/RenderPass.js"></script>
+    <script src="js/postprocessing/BloomPass.js"></script>
+    <script src="js/postprocessing/FilmPass.js"></script>
+    <script src="js/postprocessing/DotScreenPass.js"></script>
+    <script src="js/postprocessing/TexturePass.js"></script>
+    <script src="js/postprocessing/ShaderPass.js"></script>
+    <script src="js/postprocessing/MaskPass.js"></script>
+
+    <script src="js/BloomBlendPass.js"></script>
+
+    <script src="js/controls/TrackballControls.js"></script>
+
+    <script src="js/shaders/LuminosityHighPassShader.js"></script>
+    <script src="js/postprocessing/UnrealBloomPass.js"></script>
+
+    <script src="js/MathUtils.js"></script>
+
+    <!-- Shaders -->
+    <script type="x-shader/x-vertex" id="line_vertexshader">
+      attribute float vtx_alpha; // get vertex attributes
+      varying float curr_alpha; // send alpha to fragment shader
+      void main() {
+        curr_alpha = vtx_alpha;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    </script>
+    <script type="x-shader/x-fragment" id="line_fragmentshader">
+      uniform vec3 color; // get unifrom value from outside
+      varying float curr_alpha; // get alpah from vertex shader
+      void main() {
+        gl_FragColor = vec4( color, curr_alpha );
+      }
+    </script>
+    <!-- End Shaders -->
+
+    <script>
+      var camera, scene, renderer, glowComposer, controls, rendererText;
+
+      var sceneText;
+
+      var mouseX = 0, mouseY = 0, windowHalfX = 0, windowHalfY = 0;
+
+      var bloomPass, renderPass;
+
+      var gui;
+
+      var FRAME = { value: 0 };
+
+      var params = {
+        layout: 1.0,
+        strength: 3.3,
+        radius: 1,
+        threshold: 0.4,
+        color_line: 0x1c86c0, 
+        color_node: 0xffce59,
+        color_node_off: 0x42828c,
+      };
+
+
+      var CONTROLS = { layout: 1.0, 
+        lineColor: new THREE.Color(params.color_line), 
+        nodeColor: new THREE.Color(params.color_node), 
+        nodeColorOff: new THREE.Color(params.color_node_off)
+      };
+
+      var stars = [];
+      var parameters = [];
+      var materials = [];
+
+      var friends = [];
+
+      var me;
+
+      function init() {
+
+        container = document.createElement( 'div' );
+        document.body.appendChild( container );
+
+        // Camera Setup
+        camera = new THREE.PerspectiveCamera( 70, window.innerWidth / window.innerHeight, 0.01, 1000 );
+        camera.position.x = 0;
+        camera.position.y = 0;
+        camera.position.z = 5;
+
+        windowHalfX = window.innerWidth / 2;
+        windowHalfY = window.innerHeight / 2;
+     
+        scene = new THREE.Scene();
+        fogHex = 0x000000; /* As black as your heart. */
+        fogDensity = 0.002; /* So not terribly dense?  */
+
+        scene = new THREE.Scene();
+        scene.fog = new THREE.FogExp2(fogHex, fogDensity);
+
+        sceneText = new THREE.Scene();
+
+        me = new Me(scene);
+        me.updateGeometry( new THREE.Vector3(0, 0, 0), "img/gl_bg.png", new THREE.Vector3(1.5, 1.5, 1.0));
+        
+        var friend = new Friend(scene);
+        friend.generateData();
+        friend.createGeometry();
+        friends.push(friend);
+
+        // starfield
+        initStars(scene);
+
+        // renderer
+        renderer = new THREE.WebGLRenderer( { antialias : true });
+        renderer.setSize( window.innerWidth, window.innerHeight );
+        container.appendChild( renderer.domElement );
+
+        renderPass = new THREE.RenderPass( scene, camera );
+        renderPass.clear = true;
+        renderPass.clearDepth = true;
+
+        var renderPassText = new THREE.RenderPass( sceneText, camera );
+        renderPassText.clear = false;
+        renderPassText.clearDepth = true;
+
+        var bloomPass2 = new THREE.UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), params.strength, params.radius, params.threshold);
+        var copyShader = new THREE.ShaderPass(THREE.CopyShader);
+        copyShader.renderToScreen = true;
+
+        composerGlow = new THREE.EffectComposer(renderer);
+        
+        composerGlow.addPass( renderPass );
+        composerGlow.addPass( bloomPass2 );
+        composerGlow.addPass( renderPassText );
+        composerGlow.addPass( copyShader );
+
+        // GUI
+        gui = new dat.GUI();
+        gui.add( params, 'layout', 0.0, 1.0 ).onChange( function (value ) {
+          CONTROLS.layout = value;
+        })
+        gui.add( params, 'strength', 0.0, 10.0 ).onChange( function ( value ) {
+          bloomPass2.strength = Number( value );
+        } );
+        gui.add( params, 'radius', 0.0, 1.3 ).onChange( function ( value ) {
+          bloomPass2.radius = Number( value );
+        } );
+        gui.add( params, 'threshold', 0.0, 2.0 ).onChange( function ( value ) {
+          bloomPass2.threshold = Number( value );
+        } );
+        gui.addColor(params, 'color_line').onChange( function ( value ) {
+          CONTROLS.lineColor = new THREE.Color(value);
+        });
+        gui.addColor(params, 'color_node').onChange( function ( value ) {
+          CONTROLS.nodeColor = new THREE.Color(value);
+        });
+        gui.addColor(params, 'color_node_off').onChange( function ( value) {
+          CONTROLS.nodeColorOff = new THREE.Color(value);
+        })
+        gui.close();
+
+        /* Event Listeners */
+        window.addEventListener('resize', onWindowResize, false);
+        document.addEventListener('mousemove', onDocumentMouseMove, false);
+        document.addEventListener('touchstart', onDocumentTouchStart, false);
+        document.addEventListener('touchmove', onDocumentTouchMove, false);
+      }
+       
+      function animate(time) {
+
+        TWEEN.update(time);
+       
+        camera.position.x += (mouseX - camera.position.x) * 0.00002
+        camera.position.y += (-mouseY - camera.position.y) * 0.00002;
+        camera.lookAt(scene.position);
+
+        composerGlow.render();
+
+        FRAME.value += 1;
+        requestAnimationFrame( animate );
+
+        var a = CONTROLS.layout;
+
+        me.update();
+
+        for (i=0;i<friends.length;i++)
+        {
+          var f = friends[i];
+
+          for (j=0;j<f.edges.length;j++)
+          {
+            var newEdgeStartPosX = mapRange([0.0, 1.0], 
+              [f.edgeDatas[j].startPosFlat.x, f.edgeDatas[j].startPos.x], a);
+            var newEdgeStartPosY = mapRange([0.0, 1.0], 
+              [f.edgeDatas[j].startPosFlat.y, f.edgeDatas[j].startPos.y], a);
+            var newEdgeStartPosZ = mapRange([0.0, 1.0], 
+              [f.edgeDatas[j].startPosFlat.z, f.edgeDatas[j].startPos.z], a);
+
+            var newEdgeEndPosX = mapRange([0.0, 1.0], 
+              [f.edgeDatas[j].endPosFlat.x, f.edgeDatas[j].endPos.x], a); 
+            var newEdgeEndPosY = mapRange([0.0, 1.0], 
+              [f.edgeDatas[j].endPosFlat.y, f.edgeDatas[j].endPos.y], a); 
+            var newEdgeEndPosZ = mapRange([0.0, 1.0], 
+              [f.edgeDatas[j].endPosFlat.z, f.edgeDatas[j].endPos.z], a); 
+
+            f.edges[j].update(new THREE.Vector3(newEdgeStartPosX, newEdgeStartPosY, newEdgeStartPosZ), 
+              new THREE.Vector3(newEdgeEndPosX, newEdgeEndPosY, newEdgeEndPosZ), a);
+          }
+
+          for (j=0;j<f.nodes.length;j++)
+          {
+            var newNodePosX = mapRange([0.0, 1.0], 
+              [f.nodeDatas[j].posFlat.x, f.nodeDatas[j].pos.x], a);
+            var newNodePosY = mapRange([0.0, 1.0], 
+              [f.nodeDatas[j].posFlat.y, f.nodeDatas[j].pos.y], a);
+            var newNodePosZ = mapRange([0.0, 1.0], 
+              [f.nodeDatas[j].posFlat.z, f.nodeDatas[j].pos.z], a);
+            f.nodes[j].update(new THREE.Vector3(newNodePosX, newNodePosY, newNodePosZ));
+          }
+        }
+
+        animateStars();
+
+        gui.remember(params);
+      }
+
+      function animateStars()
+      {
+        var time = Date.now() * 0.000005;
+        for (i = 0; i < stars.length; i++) {
+
+            var object = stars[i];
+
+            object.rotation.y = time * (i < 4 ? i + 1 : -(i + 1));
+        }
+      }
+
+      function initStars(scene)
+      {
+        var geometry = new THREE.Geometry(); 
+
+        var particleCount = 4000; 
+
+        for (i = 0; i < particleCount; i++) {
+
+            var vertex = new THREE.Vector3();
+            vertex.x = Math.random() * 250 - 125;
+            vertex.y = Math.random() * 250 - 125;
+            vertex.z = Math.random() * 250 - 125 + 40;
+            geometry.vertices.push(vertex);
+        }
+
+        parameters = [
+            [
+                0xFFA500, 0.03
+            ],
+            [
+                0x87ceeb, 0.1
+            ],
+            [
+                0xFFA500, 0.05
+            ],
+            [
+                0x87ceeb, 0.02
+            ],
+            [
+                0xFFA500, 0.06
+            ]
+        ];
+        var parameterCount = parameters.length;
+
+        for (i = 0; i < parameterCount; i++) {
+
+            var color = parameters[i][0];
+            var size = parameters[i][1];
+
+            materials[i] = new THREE.PointsMaterial({
+                color: color,
+                size: size
+            });
+
+            particles = new THREE.PointCloud(geometry, materials[i]);
+
+            particles.rotation.x = Math.random() * 6;
+            particles.rotation.y = Math.random() * 6;
+            particles.rotation.z = Math.random() * 6;
+
+            stars.push(particles);
+            scene.add(particles);
+        }
+      }
+
+      function onWindowResize() {
+
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+
+        //controls.handleResize();
+        renderer.setSize( window.innerWidth, window.innerHeight );
+        composer.setSize( window.innerWidth, window.innerHeight );
+      }
+
+//------------------------------------------ ME ----------------------------------------------------------------------
+//------------------------------------------ ME ----------------------------------------------------------------------
+//------------------------------------------ ME ----------------------------------------------------------------------
+//------------------------------------------ ME ----------------------------------------------------------------------
+
+      var Me = function( scene )
+      {
+        this.scene = scene;
+        this.spriteMaterial = undefined;
+
+        this.updateGeometry = function( pos, imgPath, scale )
+        {
+          var spriteMap = new THREE.TextureLoader().load( imgPath );
+          this.spriteMaterial = new THREE.SpriteMaterial( { map: spriteMap, color: CONTROLS.nodeColor } );
+          var sprite = new THREE.Sprite( this.spriteMaterial );
+          sprite.position.x = pos.x;
+          sprite.position.y = pos.y;
+          sprite.position.z = pos.z;
+          sprite.scale.set( scale.x, scale.y, scale.z );
+          this.scene.add( sprite );
+        }
+
+        this.update = function()
+        {
+          this.spriteMaterial.color = CONTROLS.nodeColor;
+        }
+      }
+
+//------------------------------------------ FRIEND ----------------------------------------------------------------------
+//------------------------------------------ FRIEND ----------------------------------------------------------------------
+//------------------------------------------ FRIEND ----------------------------------------------------------------------
+//------------------------------------------ FRIEND ----------------------------------------------------------------------
+      var Friend = function( scene )
+      {
+        this.scene = scene;
+        this.edgeDatas = [];
+        this.nodeDatas = [];
+
+        this.usedPositions = [];
+        this.q1 = [];
+        this.q2 = [];
+        this.q3 = [];
+        this.q4 = [];
+        this.endPoses = [];
+
+        this.edges = [];
+        this.nodes = [];
+
+        this.generateData = function()
+        {
+          var maxD = 6.0;
+          var minD = 6.0;
+
+          for (i=0;i<5;i++)
+          {
+            var x = mapRange([0.0, 1.0], [-maxD, -minD], Math.random());
+            var y = mapRange([0.0, 1.0], [minD, maxD], Math.random());
+            var z = mapRange([0.0, 1.0], [-9, 1], Math.random());
+            var pos = new THREE.Vector3(x, y, z);
+            this.q1.push(pos);
+          }
+
+          for (i=0;i<5;i++)
+          {
+            var x = mapRange([0.0, 1.0], [minD, maxD], Math.random());
+            var y = mapRange([0.0, 1.0], [minD, maxD], Math.random());
+            var z = mapRange([0.0, 1.0], [-9, 1], Math.random());
+            var pos = new THREE.Vector3(x, y, z);
+            this.q2.push(pos);
+          }
+
+          for (i=0;i<5;i++)
+          {
+            var x = mapRange([0.0, 1.0], [minD, maxD], Math.random());
+            var y = mapRange([0.0, 1.0], [-maxD, -minD], Math.random());
+            var z = mapRange([0.0, 1.0], [-1, 1], Math.random());
+            var pos = new THREE.Vector3(x, y, z);
+            this.q3.push(pos);
+          }
+
+          for (i=0;i<5;i++)
+          {
+            var x = mapRange([0.0, 1.0], [-maxD, -minD], Math.random());
+            var y = mapRange([0.0, 1.0], [-maxD, -minD], Math.random());
+            var z = mapRange([0.0, 1.0], [-9, 1], Math.random());
+            var pos = new THREE.Vector3(x, y, z);
+            this.q4.push(pos);
+          }
+
+          if (q1.push(pos)){
+            
+          }
+
+          // Adding EDGES
+          var lineCountMap = [3, 8, 15];
+          for (i=0; i<friendCount; i++)
+          {
+            var startPos = this.startPoses[i];
+            var startPosFlat = new THREE.Vector3(startPos.x, 0.0, 0.0);
+            var endPos = this.endPoses[i];
+            var endPosFlat = new THREE.Vector3(endPos.x, 0.0, 0.0);
+
+            var data = { 
+              lineCount: lineCountMap[Math.floor(mapRange([0.0, 1.0], [0, 2.9], Math.random()))],
+              together:true,
+              startPos: startPos,
+              endPos: endPos,
+              startPosFlat: startPosFlat,
+              endPosFlat: endPosFlat
+            }
+
+            this.usedPositions.push(startPos);
+            this.usedPositions.push(endPos);
+            this.edgeDatas.push(data);
+          }
+
+          // Adding NODES
+          for (i=0; i<this.usedPositions.length; i++)
+          {
+            var scale = mapRange([0.0, 1.0], [0.5, 0.6], Math.random());
+            var pos = this.usedPositions[i];
+            var posFlat = new THREE.Vector3(pos.x, 0.0, 0.0);
+            var data = { 
+              online: Math.random() > 0.7 ? true:false,
+              pos: pos,
+              posFlat: posFlat,
+              scale: new THREE.Vector3(scale, scale, 1.0)
+            }  
+            this.nodeDatas.push(data);
+          }
+        }
+
+        this.createGeometry = function()
+        {
+          // edge
+          for ( d = 0; d < this.edgeDatas.length; d++)
+          {
+            var edge = new Edge( scene, this.edgeDatas[d].lineCount, this.edgeDatas[d].together );
+            edge.updateGeometry( 
+              this.edgeDatas[d].startPos, 
+              this.edgeDatas[d].endPos );
+              this.edges.push(edge);
+          }
+
+          // node
+          for ( b = 0; b < this.nodeDatas.length; b++)
+          {
+            var node = new Node( scene );
+
+            // symbol setup
+            var symbolID = Math.floor(Math.random() * 15) + 1;
+            var symbolImgPath = "img/Friend_Symbols_" + symbolID + ".png";
+
+            // name setup
+            var nameID = Math.floor(mapRange([0.0, 1.0], [0, 6], Math.random())) + 1;
+            var nameImgPath = "img/name" + nameID + ".png";;
+
+            node.updateGeometry( 
+              this.nodeDatas[b].pos,
+              symbolImgPath, 
+              this.nodeDatas[b].scale, 
+              this.nodeDatas[b].online, 
+              nameImgPath
+            );
+
+            this.nodes.push(node);
+          }
+        }
+      }
+
+//------------------------------------------ NODE ----------------------------------------------------------------------
+//------------------------------------------ NODE ----------------------------------------------------------------------
+//------------------------------------------ NODE ----------------------------------------------------------------------
+//------------------------------------------ NODE ----------------------------------------------------------------------
+      var Node = function( scene )
+      {
+        this.scene = scene;
+        
+        this.sprite;
+        this.nameSprite;
+        this.symbolSprite;
+
+        this.spriteMaterial = undefined;
+        this.nameMaterial = undefined;
+        this.symbolMaterial = undefined;
+
+        this.posOffsetNameX = 0.0;
+        this.posOffsetNameY = -0.4;
+        this.posOffsetNameZ = 0.0;
+
+        this.posOffsetSymbolZ = 0.01;
+
+        this.nameScale = 1.6;
+
+        this.online = false;
+
+        this.tweenVals = { value: undefined };
+
+        this.updateGeometry = function( pos, imgPath, scale, online, nameImgPath )
+        {
+          this.online = online;
+          var generalOpacity = 0.5;
+          var textOpacity = 1.2;
+          var ringOpacity = 0.8;
+          if (this.online)
+          {
+            ringOpacity = 5.5;
+          }
+          // BG
+          var spriteMap = new THREE.TextureLoader().load( "img/gl_bg.png" );
+          this.spriteMaterial = new THREE.SpriteMaterial( { map: spriteMap, transparent: true, opacity : ringOpacity, color: this.online ? CONTROLS.nodeColor : CONTROLS.nodeColorOff } );
+          //this.spriteMaterial.side = THREE.DoubleSide;
+          var sprite = new THREE.Sprite( this.spriteMaterial );
+          sprite.position.x = pos.x;
+          sprite.position.y = pos.y;
+          sprite.position.z = pos.z;
+          sprite.scale.set( scale.x, scale.y, scale.z );
+          this.sprite = sprite;
+          this.sprite.lookAt(camera.position);
+          this.scene.add( this.sprite );
+
+          // MG
+          var spriteMapSymbol = new THREE.TextureLoader().load( imgPath );
+          this.symbolMaterial = new THREE.SpriteMaterial( { map: spriteMapSymbol, transparent: true, opacity : generalOpacity, color: CONTROLS.nodeColor } );
+          //this.spriteMaterial.side = THREE.DoubleSide;
+          var spriteSymbol = new THREE.Sprite( this.symbolMaterial );
+          spriteSymbol.position.x = pos.x;
+          spriteSymbol.position.y = pos.y;
+          spriteSymbol.position.z = pos.z + this.posOffsetSymbolZ;
+          var symbolScale = 0.6;
+          spriteSymbol.scale.set( scale.x * symbolScale, scale.y * symbolScale, scale.z * symbolScale );
+          this.symbolSprite = spriteSymbol;
+          this.symbolSprite.lookAt(camera.position);
+          this.scene.add( this.symbolSprite );
+
+          // FG
+          var spriteMapName = new THREE.TextureLoader().load( nameImgPath );
+          this.nameMaterial = new THREE.SpriteMaterial( { map: spriteMapName, transparent: true, opacity : textOpacity, color: CONTROLS.nodeColor } );
+          var spriteName = new THREE.Sprite( this.nameMaterial );
+          spriteName.position.x = pos.x + this.posOffsetNameX;
+          spriteName.position.y = pos.y + this.posOffsetNameY;
+          spriteName.position.z = pos.z + this.posOffsetNameZ;
+          spriteName.scale.set( scale.x * this.nameScale, scale.y * this.nameScale, scale.z * this.nameScale );
+          this.nameSprite = spriteName;
+          this.nameSprite.lookAt(camera.position);
+          this.scene.add( this.nameSprite );
+
+          if (this.online)
+          {
+            var tweenVals = { value: ringOpacity  };
+            var spriteMaterial = this.spriteMaterial;
+            var tween = new TWEEN.Tween(tweenVals) // Create a new tween that modifies 'coords'.
+            .to({ value : ringOpacity * 0.3 }, Math.random() * 150 + 50) // Move to (300, 200) in 1 second.
+            .easing(TWEEN.Easing.Quadratic.InOut) // Use an easing function to make the animation smooth.
+            .onUpdate(function() { // Called after tween.js updates 'coords'.
+                // Move 'box' to the position described by 'coords' with a CSS translation.
+                spriteMaterial.opacity = tweenVals.value;
+            })
+            .yoyo( true )
+            .repeat( Infinity )
+            .start(); // Start the tween immediately.
+          }
+          
+          //this.nameStr = name;
+          //this.createNodeText(name);
+        }
+        
+        /*
+        this.createTextCanvas = function(text, color, font, size) {
+          size = size;
+          var canvas = document.createElement('canvas');
+          var ctx = canvas.getContext('2d');
+          var fontStr = (font || 'Arial') + ' ' + (size +'px');
+          ctx.font = fontStr; 
+          var w = ctx.measureText(text).width;
+          var h = Math.ceil(size*1.25);
+          canvas.width = w;
+          canvas.height = h;
+          ctx.fillStyle = color || 'black';
+          ctx.fillText(text, 0, size);
+          return canvas;
+        }
+
+        this.createText2D = function(text, color, font, size, segW, segH) 
+        {
+          var canvas = this.createTextCanvas(text, color, font, size);
+          var plane = new THREE.PlaneGeometry(canvas.width, canvas.height, segW, segH);
+          var tex = new THREE.Texture(canvas);
+          tex.needsUpdate = true;
+          var planeMat = new THREE.MeshBasicMaterial({
+            map: tex, color: 0xffffff, transparent: true
+          });
+          var mesh = new THREE.Mesh(plane, planeMat);
+          mesh.doubleSided = true;
+          return mesh;
+        }
+
+        this.createRing = function(radius)
+        {
+          var geometry = new THREE.CylinderGeometry( radius, radius, 0.02, 64 );
+          var edges = new THREE.EdgesGeometry( geometry );
+          this.ring = new THREE.LineSegments( edges, new THREE.LineBasicMaterial( { color: 0x059eeb } ) );
+          this.ring.position.x = this.position.x;
+          this.ring.position.y = this.position.y;
+          this.ring.position.z = this.position.z;
+          this.scene.add( this.ring );
+        }
+
+        this.createNodeText = function(name) {
+
+          var mesh = this.createText2D(name, "yellow", "Arial", 32, 4, 4);
+          //mesh.overdraw = true;
+          //mesh.doubleSided = true;
+          mesh.position.x = this.position.x + 0.22;
+          mesh.position.y = this.position.y;
+          mesh.position.z = this.position.z + 0.1;
+          mesh.scale.x = 0.01;
+          mesh.scale.y = 0.01;
+
+          sceneText.add(mesh);
+        }
+        */
+
+        this.update = function(pos)
+        {
+          this.sprite.position.x = pos.x;
+          this.sprite.position.y = pos.y;
+          this.sprite.position.z = pos.z;
+
+          this.nameSprite.position.x = pos.x + this.posOffsetNameX;
+          this.nameSprite.position.y = pos.y + this.posOffsetNameY;
+          this.nameSprite.position.z = pos.z + this.posOffsetNameZ;
+
+          this.symbolSprite.position.x = pos.x;
+          this.symbolSprite.position.y = pos.y;
+          this.symbolSprite.position.z = pos.z + this.posOffsetSymbolZ;
+
+          this.spriteMaterial.color = this.online ? CONTROLS.nodeColor : CONTROLS.nodeColorOff;
+          
+          this.nameMaterial.color = this.online ? CONTROLS.nodeColor : CONTROLS.nodeColorOff;
+
+          this.symbolMaterial.color = this.online ? CONTROLS.nodeColor : CONTROLS.nodeColorOff;
+        }
+      }
+
+//------------------------------------------ EDGE ----------------------------------------------------------------------
+//------------------------------------------ EDGE ----------------------------------------------------------------------
+//------------------------------------------ EDGE ----------------------------------------------------------------------
+//------------------------------------------ EDGE ----------------------------------------------------------------------
+//------------------------------------------ EDGE ----------------------------------------------------------------------
+      var Edge = function( scene, lineCount, together ) 
+      {
+        this.scene = scene;
+        this.line_geometries = [];
+        this.line_meshes = [];
+        this.shaderMaterial = undefined;
+        this.lineCount = lineCount;
+        this.together = together;
+
+
+        this.getLinePositions = function(startPos, endPos, a, lineCount = 1)
+        {
+          //var length_point = getLength(startPos, endPos);
+          var center_point = getCenterPoints(startPos, endPos);
+          //var reverse = startPos.x > endPos.x ? -1.0 : 1.0;
+          startPos.y += a * 0.0008 * lineCount;
+          endPos.y += a * 0.0008 * lineCount;
+
+          center_point.y += a * 0.0008 * lineCount;
+          center_point.z += a * 1.0; //length_point * 0.8;
+
+          // get points for the curve
+          var curve = new THREE.QuadraticBezierCurve3(startPos, center_point, endPos);
+          var pointDensity = 10;//Math.ceil(length_point * 3.0);
+          var points = curve.getPoints(pointDensity);
+          var positions = new Float32Array( points.length * 3 );
+          
+          for (var i = 0; i < points.length; i++)
+          {
+            positions[i * 3]     = points[i].x;
+            positions[i * 3 + 1] = points[i].y;
+            positions[i * 3 + 2] = points[i].z;
+          }
+
+          return positions;
+        }
+
+        this.updateGeometry = function(startPos, endPos)
+        {      
+          // color
+          //var color = CONTROLS.lineColor;
+          //var HSL = color.getHSL( color );
+          //color.setHSL(HSL.h, 1.2, 1.0);
+          var uniforms = {
+            color: { type: "c", value: CONTROLS.lineColor}
+          };      
+          this.shaderMaterial = new THREE.ShaderMaterial( {
+            //attributes:     line_geometry.custom_attributes,
+            uniforms:       uniforms,
+            vertexShader:   document.getElementById( 'line_vertexshader' ).textContent,
+            fragmentShader: document.getElementById( 'line_fragmentshader' ).textContent,
+            blending:       THREE.AdditiveBlending,
+            depthTest:      false,
+            transparent:    true
+
+          } );
+          this.shaderMaterial.linewidth = 1;
+
+          // center position for curve
+          for ( m = 0; m < this.lineCount; m++)
+          {
+            // create buffer geo
+            var line_geometry = new THREE.BufferGeometry();//new THREE.Geometry();
+
+            // position
+            var positions = this.getLinePositions(startPos, endPos, 1.0, m);
+            line_geometry.addAttribute( 'position' , new THREE.BufferAttribute( positions, 3 ) );
+            
+            // alpha - vertex
+            var pointsCount  = positions.length / 3;
+            var vertexAlphas = new Float32Array( pointsCount );
+            for (var i=0; i < pointsCount; i++){
+              vertexAlphas[i] = 1.0;
+            }
+            line_geometry.addAttribute('vtx_alpha', new THREE.BufferAttribute( vertexAlphas , 1 ) );
+            line_geometry.getAttribute('vtx_alpha').needsUpdate = true;
+            
+            //Create the final Object3d to add to the scene
+            var line_mesh = new THREE.Line( line_geometry, this.shaderMaterial );
+            this.line_geometries.push(line_geometry);;
+            this.line_meshes.push(line_mesh);
+
+            // finally add to the SCENE
+            this.scene.add(line_mesh);
+          }          
+        }
+
+        
+        this.update = function(startPos, endPos, a) 
+        { 
+          /*
+          var uniforms = {
+            color: { type: "c", value: CONTROLS.lineColor}
+          };
+          this.shaderMaterial = new THREE.ShaderMaterial( {
+            //attributes:     line_geometry.custom_attributes,
+            uniforms:       uniforms,
+            vertexShader:   document.getElementById( 'line_vertexshader' ).textContent,
+            fragmentShader: document.getElementById( 'line_fragmentshader' ).textContent,
+            blending:       THREE.AdditiveBlending,
+            depthTest:      false,
+            transparent:    true
+
+          } );
+          this.shaderMaterial.linewidth = 1;
+          */
+          
+          this.shaderMaterial = new THREE.LineBasicMaterial( {
+            color: CONTROLS.lineColor,
+            linewidth: 5,
+            depthTest: false,
+            blending: THREE.AdditiveBlending,
+            transparent: false
+          } );
+
+          for (i=0;i<this.line_meshes.length;i++)
+          {
+            this.line_meshes[i].material = this.shaderMaterial;
+          }
+
+          for (i=0;i<this.line_geometries.length;i++)
+          {
+            var geo = this.line_geometries[i];
+            var positions = this.getLinePositions(startPos, endPos, a, i);
+            var idx = 0;
+            for ( s = 0; s < geo.getAttribute('position').count; s++)
+            {
+              geo.getAttribute('position').needsUpdate = true;
+
+              geo.getAttribute('position').setX(s, positions[idx]);
+              idx += 1;
+              geo.getAttribute('position').setY(s, positions[idx]);
+              idx += 1;
+              geo.getAttribute('position').setZ(s, positions[idx]);
+              idx += 1;
+            }
+          }
+
+        }
+          /*
+          for ( i = 0; i < this.line_geometry.getAttribute('vtx_alpha').count; i++)
+          {
+            this.line_geometry.getAttribute('vtx_alpha').needsUpdate = true;
+            this.line_geometry.getAttribute('vtx_alpha').setX(i, 1.0);
+          }
+            
+                        if ( i < geo.getAttribute('vtx_alpha').count ) {
+
+              // index will match the vertex count in the geo to grab each vertex's vtx_alpha attribute.
+              var index = Math.floor(i);
+              geo.getAttribute('vtx_alpha').needsUpdate = true;
+              geo.getAttribute('vtx_alpha').setX(index, 0.4);
+          */
+
+          //var i = FRAME.value - 24;
+          //console.log(this.line_geometries.length);
+          /*
+          for ( k = 0; k < this.line_geometries.length; k++)
+          {
+            var geo = this.line_geometries[k];
+
+            for ( i = 0; i < geo.getAttribute('vtx_alpha').count; i++)
+            {
+              geo.getAttribute('vtx_alpha').needsUpdate = true;
+              geo.getAttribute('vtx_alpha').setX(i, 1.0);
+            }
+
+            }  
+          }
+          */
+          
+          /*
+        }*/
+      };
+
+//------------------------------------------ MAIN ----------------------------------------------------------------------
+//------------------------------------------ MAIN ----------------------------------------------------------------------
+//------------------------------------------ MAIN ----------------------------------------------------------------------
+//------------------------------------------ MAIN ----------------------------------------------------------------------
+//------------------------------------------ MAIN ----------------------------------------------------------------------
+//------------------------------------------ MAIN ----------------------------------------------------------------------
+//------------------------------------------ MAIN ----------------------------------------------------------------------
+
+      init();
+      animate();
+
+      function onDocumentMouseMove(e) {
+          mouseX = e.clientX - windowHalfX;
+          mouseY = e.clientY - windowHalfY;
+      }
+
+      /*  Mobile users?  I got your back homey  */
+
+      function onDocumentTouchStart(e) {
+
+          if (e.touches.length === 1) {
+
+              e.preventDefault();
+              mouseX = e.touches[0].pageX - windowHalfX;
+              mouseY = e.touches[0].pageY - windowHalfY;
+          }
+      }
+
+      function onDocumentTouchMove(e) {
+
+          if (e.touches.length === 1) {
+
+              e.preventDefault();
+              mouseX = e.touches[0].pageX - windowHalfX;
+              mouseY = e.touches[0].pageY - windowHalfY;
+          }
+      }
+
+
+    </script>
+
+  </body>
+</html>
