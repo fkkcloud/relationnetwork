@@ -17,6 +17,8 @@
     <!--script src="http://cdnjs.cloudflare.com/ajax/libs/three.js/r73/three.js"></script-->
     <script "text/javascript" src="js/dat.gui.js"></script>
 
+    <script src="js/controls/FlyControls.js"></script>
+
     <script src="js/shaders/BleachBypassShader.js"></script>
     <script src="js/shaders/ColorifyShader.js"></script>
     <script src="js/shaders/ConvolutionShader.js"></script>
@@ -75,6 +77,8 @@
 
       var gui;
 
+      var clock = new THREE.Clock();
+
       var FRAME = { value: 0 };
 
       var params = {
@@ -82,7 +86,7 @@
         strength: 3.3,
         radius: 1,
         threshold: 0.4,
-        color_line: 0x1c86c0, 
+        color_line: 0xc0721c, 
         color_node: 0xffce59,
         color_node_off: 0x42828c,
       };
@@ -126,7 +130,7 @@
         sceneText = new THREE.Scene();
 
         me = new Me(scene);
-        me.updateGeometry( new THREE.Vector3(0, 0, 0), "img/gl_bg.png", new THREE.Vector3(1.5, 1.5, 1.0));
+        me.updateGeometry( new THREE.Vector3(0, 0, 0), new THREE.Vector3(1.0, 1.0, 1.0));
         
         var friend = new Friend(scene);
         friend.generateData();
@@ -185,6 +189,13 @@
         })
         gui.close();
 
+        controls = new THREE.FlyControls( camera );
+				controls.movementSpeed = 1000;
+				controls.domElement = renderer.domElement;
+				controls.rollSpeed = Math.PI / 36;
+				controls.autoForward = false;
+				controls.dragToLook = false;
+
         /* Event Listeners */
         window.addEventListener('resize', onWindowResize, false);
         document.addEventListener('mousemove', onDocumentMouseMove, false);
@@ -196,9 +207,9 @@
 
         TWEEN.update(time);
        
-        camera.position.x += (mouseX - camera.position.x) * 0.00002
-        camera.position.y += (-mouseY - camera.position.y) * 0.00002;
-        camera.lookAt(scene.position);
+        //camera.position.x += (mouseX - camera.position.x) * 0.00002
+        //camera.position.y += (-mouseY - camera.position.y) * 0.00002;
+        //camera.lookAt(scene.position);
 
         composerGlow.render();
 
@@ -206,6 +217,10 @@
         requestAnimationFrame( animate );
 
         var a = CONTROLS.layout;
+
+        var delta = clock.getDelta();
+        controls.movementSpeed = 0.1 * d;
+				controls.update( delta );
 
         me.update();
 
@@ -335,10 +350,11 @@
       {
         this.scene = scene;
         this.spriteMaterial = undefined;
+        this.symbolMaterial = undefined;
 
-        this.updateGeometry = function( pos, imgPath, scale )
+        this.updateGeometry = function( pos, scale )
         {
-          var spriteMap = new THREE.TextureLoader().load( imgPath );
+          var spriteMap = new THREE.TextureLoader().load( "img/gl_bg.png" );
           this.spriteMaterial = new THREE.SpriteMaterial( { map: spriteMap, color: CONTROLS.nodeColor } );
           var sprite = new THREE.Sprite( this.spriteMaterial );
           sprite.position.x = pos.x;
@@ -346,11 +362,22 @@
           sprite.position.z = pos.z;
           sprite.scale.set( scale.x, scale.y, scale.z );
           this.scene.add( sprite );
+
+          var spriteSymbolMap = new THREE.TextureLoader().load( "img/Friend_Symbols_6.png" );
+          this.symbolMaterial = new THREE.SpriteMaterial( { map: spriteSymbolMap, transparent: true, color: CONTROLS.nodeColor } );
+          var spriteSymbol = new THREE.Sprite( this.symbolMaterial );
+          spriteSymbol.position.x = pos.x;
+          spriteSymbol.position.y = pos.y;
+          spriteSymbol.position.z = pos.z + 0.01;
+          this.symbolMaterial.opacity = 0.55;
+          spriteSymbol.scale.set( scale.x * 0.6, scale.y * 0.6, scale.z * 0.6 );
+          this.scene.add( spriteSymbol );
         }
 
         this.update = function()
         {
           this.spriteMaterial.color = CONTROLS.nodeColor;
+          this.symbolMaterial.color = CONTROLS.nodeColor;
         }
       }
 
@@ -369,6 +396,7 @@
         this.q2 = [];
         this.q3 = [];
         this.q4 = [];
+        this.startPoses = [];
         this.endPoses = [];
 
         this.edges = [];
@@ -377,7 +405,7 @@
         this.generateData = function()
         {
           var maxD = 6.0;
-          var minD = 6.0;
+          var minD = 1.0;
 
           for (i=0;i<5;i++)
           {
@@ -414,14 +442,28 @@
             var pos = new THREE.Vector3(x, y, z);
             this.q4.push(pos);
           }
+          
+          var allPosLists1 = [this.q1,this.q2,this.q3,this.q4];
+          for (i=0; i<allPosLists1.length; i++){
+            var ls = allPosLists1[i];
+            for (j=0; j<ls.length; j++)
+            {
+              this.startPoses.push(ls[j]);
+            }
+          }
 
-          if (q1.push(pos)){
-            
+          var allPosLists2 = [this.q2,this.q3,this.q4,this.q1];
+          for (i=0; i<allPosLists2.length; i++){
+            var ls = allPosLists2[i];
+            for (j=0; j<ls.length; j++)
+            {
+              this.endPoses.push(ls[j]);
+            }
           }
 
           // Adding EDGES
-          var lineCountMap = [3, 8, 15];
-          for (i=0; i<friendCount; i++)
+          var lineCountMap = [3, 6, 10];
+          for (i=0; i< this.startPoses.length ; i++)
           {
             var startPos = this.startPoses[i];
             var startPosFlat = new THREE.Vector3(startPos.x, 0.0, 0.0);
@@ -438,14 +480,36 @@
             }
 
             this.usedPositions.push(startPos);
-            this.usedPositions.push(endPos);
+            //this.usedPositions.push(endPos);
+
+            this.edgeDatas.push(data);
+          }
+
+          // Adding Centrified EDGES
+          var lineCountMap = [3, 6, 10];
+          for (i=0; i< this.usedPositions.length ; i++)
+          {
+            var startPos = this.usedPositions[i];
+            var startPosFlat = new THREE.Vector3(startPos.x, 0.0, 0.0);
+            var endPos = new THREE.Vector3(0.0, 0.0, 0.0);
+            var endPosFlat = new THREE.Vector3(0.0, 0.0, 0.0);
+
+            var data = { 
+              lineCount: lineCountMap[Math.floor(mapRange([0.0, 1.0], [0, 2.9], Math.random()))],
+              together:true,
+              startPos: startPos,
+              endPos: endPos,
+              startPosFlat: startPosFlat,
+              endPosFlat: endPosFlat
+            }
+
             this.edgeDatas.push(data);
           }
 
           // Adding NODES
           for (i=0; i<this.usedPositions.length; i++)
           {
-            var scale = mapRange([0.0, 1.0], [0.5, 0.6], Math.random());
+            var scale = mapRange([0.0, 1.0], [0.7, 0.8], Math.random());
             var pos = this.usedPositions[i];
             var posFlat = new THREE.Vector3(pos.x, 0.0, 0.0);
             var data = { 
@@ -465,7 +529,7 @@
           {
             var edge = new Edge( scene, this.edgeDatas[d].lineCount, this.edgeDatas[d].together );
             edge.updateGeometry( 
-              this.edgeDatas[d].startPos, 
+              this.edgeDatas[d].startPos,
               this.edgeDatas[d].endPos );
               this.edges.push(edge);
           }
@@ -685,17 +749,16 @@
         this.lineCount = lineCount;
         this.together = together;
 
-
         this.getLinePositions = function(startPos, endPos, a, lineCount = 1)
         {
           //var length_point = getLength(startPos, endPos);
           var center_point = getCenterPoints(startPos, endPos);
-          //var reverse = startPos.x > endPos.x ? -1.0 : 1.0;
-          startPos.y += a * 0.0008 * lineCount;
-          endPos.y += a * 0.0008 * lineCount;
 
-          center_point.y += a * 0.0008 * lineCount;
-          center_point.z += a * 1.0; //length_point * 0.8;
+          var lineRoundness = a * 0.002 * lineCount;
+          startPos.y += lineRoundness;
+          endPos.y += lineRoundness;
+          center_point.y += lineRoundness;
+          //center_point.z += a * 0.1; //length_point * 0.8;
 
           // get points for the curve
           var curve = new THREE.QuadraticBezierCurve3(startPos, center_point, endPos);
@@ -863,30 +926,32 @@
       animate();
 
       function onDocumentMouseMove(e) {
-          mouseX = e.clientX - windowHalfX;
-          mouseY = e.clientY - windowHalfY;
+          //mouseX = e.clientX - windowHalfX;
+          //mouseY = e.clientY - windowHalfY;
       }
 
       /*  Mobile users?  I got your back homey  */
 
       function onDocumentTouchStart(e) {
-
+        /*
           if (e.touches.length === 1) {
 
               e.preventDefault();
               mouseX = e.touches[0].pageX - windowHalfX;
               mouseY = e.touches[0].pageY - windowHalfY;
           }
+          */
       }
 
       function onDocumentTouchMove(e) {
-
+        /*
           if (e.touches.length === 1) {
 
               e.preventDefault();
               mouseX = e.touches[0].pageX - windowHalfX;
               mouseY = e.touches[0].pageY - windowHalfY;
           }
+          */
       }
 
 
